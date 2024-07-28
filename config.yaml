@@ -1,0 +1,8 @@
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: your-db-password
+  dbname: tfmv
+local:
+  base_dir: /Users/thomasmcgeehan/dbX/dbX/data

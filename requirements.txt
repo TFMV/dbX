@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+google-cloud-storage
+pyarrow
+adbc_driver_postgresql
+asyncpg
+pydantic
+pyyaml

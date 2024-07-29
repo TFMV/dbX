@@ -213,6 +213,38 @@ async def export_parquet_connectorx(data_params: ExportDataRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/export-arrow-connectorx/", response_model=ExportDataResponse)
+async def export_arrow_connectorx(data_params: ExportDataRequest):
+    start_time = time.time()
+    try:
+        export_file_path = os.path.join(base_dir, data_params.export_path)
+        os.makedirs(os.path.dirname(export_file_path), exist_ok=True)
+
+        # Construct the query
+        query = f"SELECT * FROM {data_params.table_name}"
+
+        # Fetch the data using ConnectorX
+        if data_params.partitioning:
+            partition_col = data_params.partitioning[0]
+            table = cx.read_sql(
+                uri, query, return_type="arrow2", 
+                protocol="binary",  # Adjust the protocol if needed
+                partition_on=partition_col, partition_num=10
+            )
+        else:
+            table = cx.read_sql(uri, query, return_type="arrow2", protocol="binary")
+
+        # Export to Arrow (Feather)
+        if data_params.partitioning:
+            ds.write_dataset(table, export_file_path, format="feather", partitioning=data_params.partitioning)
+        else:
+            feather.write_feather(table, export_file_path)
+
+        end_time = time.time()
+        return {"status": "Table exported to Arrow using ConnectorX", "time_taken": end_time - start_time}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/generate-test-data/", response_model=GenerateDataResponse)
 async def generate_test_data():
     start_time = time.time()

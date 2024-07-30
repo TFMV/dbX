@@ -7,3 +7,4 @@ asyncpg
 pydantic
 pyyaml
 connectorx
+adbc_driver_sqlite

@@ -4,5 +4,7 @@ database:
   user: postgres
   password: your-db-password
   dbname: tfmv
+sqlite:
+  dbname: data/lite/chinook.db
 local:
   base_dir: /Users/thomasmcgeehan/dbX/dbX/data

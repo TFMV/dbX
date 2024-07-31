@@ -2,22 +2,19 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
+	"sync"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-adbc/go/adbc/drivermgr"
+	"github.com/apache/arrow/go/v17/arrow/arrio"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/apache/arrow/go/v17/parquet"
 	"github.com/apache/arrow/go/v17/parquet/pqarrow"
-	"github.com/gin-gonic/gin"
 )
-
-type request struct {
-	TableName string `json:"table_name"`
-}
 
 type response struct {
 	RowsWritten int64  `json:"rows_written"`
@@ -25,37 +22,23 @@ type response struct {
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	r := gin.Default()
-	r.POST("/export", exportHandler)
-	log.Printf("Starting server on port %s...\n", port)
-	r.Run(fmt.Sprintf(":%s", port))
-}
-
-func exportHandler(c *gin.Context) {
-	var req request
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
-		return
-	}
+	// Define command-line arguments
+	tableName := flag.String("table", "", "Name of the table to export")
+	flag.Parse()
 
 	// Validate the input
-	if req.TableName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Table name is required"})
-		return
+	if *tableName == "" {
+		log.Fatalf("Table name is required")
 	}
 
-	resp, err := exportTable(req.TableName)
+	// Call the exportTable function
+	resp, err := exportTable(*tableName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to export table: %v", err)})
-		return
+		log.Fatalf("Failed to export table: %v", err)
 	}
 
-	c.JSON(http.StatusOK, resp)
+	// Print the response
+	fmt.Printf("Rows written: %d\nMessage: %s\n", resp.RowsWritten, resp.Message)
 }
 
 func exportTable(tableName string) (*response, error) {
@@ -107,15 +90,36 @@ func exportTable(tableName string) (*response, error) {
 	}
 	defer parquetWriter.Close()
 
+	// Channel to pass records from readers to writers
+	recordChan := make(chan arrio.Record, 100)
 	var rowsWritten int64
+	var wg sync.WaitGroup
+
+	// Start a number of writer goroutines
+	numWriters := 4
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for record := range recordChan {
+				if err := parquetWriter.Write(record); err != nil {
+					log.Fatalf("failed to write Arrow table to Parquet file: %v", err)
+				}
+				rowsWritten += record.NumRows()
+				record.Release()
+			}
+		}()
+	}
+
+	// Read records and send them to the writers
 	for reader.Next() {
 		record := reader.Record()
-		if err := parquetWriter.Write(record); err != nil {
-			return nil, fmt.Errorf("failed to write Arrow table to Parquet file: %w", err)
-		}
-		rowsWritten += record.NumRows()
-		record.Release()
+		recordChan <- record
 	}
+
+	// Close the record channel and wait for all writers to finish
+	close(recordChan)
+	wg.Wait()
 
 	return &response{
 		RowsWritten: rowsWritten,

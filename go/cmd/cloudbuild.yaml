@@ -1,12 +1,22 @@
 steps:
-  # Step 1: Build the base image
+  # Step 1: Conditionally build the base image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/dbx-base', '-f', 'Dockerfile.base', '.']
     id: BuildBaseImage
     waitFor: ["-"]
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$_BUILD_BASE_IMAGE" == "true" ]; then
+          docker build -t gcr.io/$PROJECT_ID/dbx-base -f Dockerfile.base .;
+        else
+          echo "Skipping base image build";
+        fi
 
-  # Step 2: Replace PROJECT_ID in Dockerfile.app.tmpl and build the application image using the base image
+  # Step 2: Build the application image using the base image
   - name: 'gcr.io/cloud-builders/docker'
+    id: BuildAppImage
+    waitFor: ["BuildBaseImage"]
     entrypoint: 'bash'
     args:
       - '-c'
@@ -15,5 +25,5 @@ steps:
         docker build -t gcr.io/$PROJECT_ID/dbx -f Dockerfile.app .
 
 images:
-  - 'gcr.io/$PROJECT_ID/dbx-base'
   - 'gcr.io/$PROJECT_ID/dbx'
+  - 'gcr.io/$PROJECT_ID/dbx-base'

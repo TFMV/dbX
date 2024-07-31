@@ -1,0 +1,13 @@
+database:
+  source:
+    type: postgres
+    user: postgres
+    password: postgres_password
+    host: localhost
+    port: 5432
+    dbname: tfmv
+  target:
+    type: sqlite
+    dbname: /Users/thomasmcgeehan/dbX/dbX/data/lite/chinook.db
+local:
+  base_dir: /Users/thomasmcgeehan/dbX/dbX/data

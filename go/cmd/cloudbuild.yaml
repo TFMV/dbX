@@ -1,0 +1,19 @@
+steps:
+  # Step 1: Build the base image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/dbx-base', '-f', 'Dockerfile.base', '.']
+    id: BuildBaseImage
+    waitFor: ["-"]
+
+  # Step 2: Replace PROJECT_ID in Dockerfile.app.tmpl and build the application image using the base image
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        sed "s/{{PROJECT_ID}}/$PROJECT_ID/g" Dockerfile.app.tmpl > Dockerfile.app
+        docker build -t gcr.io/$PROJECT_ID/dbx -f Dockerfile.app .
+
+images:
+  - 'gcr.io/$PROJECT_ID/dbx-base'
+  - 'gcr.io/$PROJECT_ID/dbx'

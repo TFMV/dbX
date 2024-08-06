@@ -2,7 +2,7 @@ database:
   source:
     type: postgres
     user: postgres
-    password: postgres_password
+    password: notapassword
     host: localhost
     port: 5432
     dbname: tfmv

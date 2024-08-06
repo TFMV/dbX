@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
+	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-adbc/go/adbc/drivermgr"
-	"github.com/apache/arrow/go/v17/arrow/arrio"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/apache/arrow/go/v17/parquet"
 	"github.com/apache/arrow/go/v17/parquet/pqarrow"
 )
 
 type response struct {
-	RowsWritten int64  `json:"rows_written"`
-	Message     string `json:"message"`
+	RowsWritten    int64         `json:"rows_written"`
+	Message        string        `json:"message"`
+	Duration       time.Duration `json:"duration"`
+	OutputFileSize int64         `json:"output_file_size"`
 }
 
 func main() {
@@ -32,20 +33,23 @@ func main() {
 	}
 
 	// Call the exportTable function
+	startTime := time.Now()
 	resp, err := exportTable(*tableName)
+	duration := time.Since(startTime)
+
 	if err != nil {
 		log.Fatalf("Failed to export table: %v", err)
 	}
 
 	// Print the response
-	fmt.Printf("Rows written: %d\nMessage: %s\n", resp.RowsWritten, resp.Message)
+	fmt.Printf("Rows written: %d\nMessage: %s\nDuration: %v\nOutput file size: %d bytes\n", resp.RowsWritten, resp.Message, duration, resp.OutputFileSize)
 }
 
 func exportTable(tableName string) (*response, error) {
 	var drv drivermgr.Driver
 	db, err := drv.NewDatabase(map[string]string{
 		"driver":          "adbc_driver_postgresql",
-		adbc.OptionKeyURI: "postgresql://postgres:notapassword@130.211.115.76:5432/postgres",
+		adbc.OptionKeyURI: "postgresql://tfmv:notapassword@localhost:5432/postgres",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ADBC database: %w", err)
@@ -84,45 +88,39 @@ func exportTable(tableName string) (*response, error) {
 	defer parquetFile.Close()
 
 	props := parquet.NewWriterProperties(parquet.WithAllocator(pool))
-	parquetWriter, err := pqarrow.NewFileWriter(reader.Schema(), parquetFile, props, pqarrow.DefaultWriterProps())
+	arrowProps := pqarrow.DefaultWriterProps()
+
+	parquetWriter, err := pqarrow.NewFileWriter(reader.Schema(), parquetFile, props, arrowProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Parquet writer: %w", err)
 	}
 	defer parquetWriter.Close()
 
-	// Channel to pass records from readers to writers
-	recordChan := make(chan arrio.Record, 100)
-	var rowsWritten int64
-	var wg sync.WaitGroup
-
-	// Start a number of writer goroutines
-	numWriters := 4
-	for i := 0; i < numWriters; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for record := range recordChan {
-				if err := parquetWriter.Write(record); err != nil {
-					log.Fatalf("failed to write Arrow table to Parquet file: %v", err)
-				}
-				rowsWritten += record.NumRows()
-				record.Release()
-			}
-		}()
-	}
-
-	// Read records and send them to the writers
+	rowsWritten := int64(0)
 	for reader.Next() {
 		record := reader.Record()
-		recordChan <- record
+		if record == nil {
+			continue
+		}
+		if err := parquetWriter.Write(record); err != nil {
+			return nil, fmt.Errorf("failed to write record to Parquet file: %w", err)
+		}
+		rowsWritten += record.NumRows()
+		record.Release()
 	}
 
-	// Close the record channel and wait for all writers to finish
-	close(recordChan)
-	wg.Wait()
+	if err := parquetWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close Parquet writer: %w", err)
+	}
+
+	fileInfo, err := os.Stat("output.parquet")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get output file info: %w", err)
+	}
 
 	return &response{
-		RowsWritten: rowsWritten,
-		Message:     "Data successfully written to Parquet file",
+		RowsWritten:    rowsWritten,
+		Message:        "Data successfully written to Parquet file",
+		OutputFileSize: fileInfo.Size(),
 	}, nil
 }

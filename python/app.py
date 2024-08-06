@@ -11,7 +11,7 @@ import pyarrow.feather as feather
 from pgeon import copy_query
 from database import db_manager, get_pg_uri
 from models import LoadDataRequest, LoadDataResponse, ExportDataRequest, ExportDataResponse, CopyTableRequest, CopyTableResponse, GenerateDataResponse
-from db_operations import ingest_to_database, generate_metadata
+from db_operations import ingest_to_database
 import yaml
 
 app = FastAPI()
@@ -22,27 +22,54 @@ with open("config.yaml", "r") as file:
 
 base_dir = config['local']['base_dir']
 
+def generate_metadata(schema):
+    metadata = {
+        "fields": [
+            {
+                "name": field.name,
+                "type": str(field.type),
+                "nullable": field.nullable
+            }
+            for field in schema
+        ]
+    }
+    return metadata
+
 @app.post("/load-data/", response_model=LoadDataResponse)
 async def load_data(data_params: LoadDataRequest):
     start_time = time.time()
     try:
-        dataset = None
-        if data_params.directory:
-            dataset_path = os.path.join(base_dir, data_params.directory)
-            dataset = ds.dataset(dataset_path, format=data_params.file_format, partitioning=data_params.partitioning)
-        elif data_params.local_path:
-            local_file_path = os.path.join(base_dir, data_params.local_path)
-            dataset = ds.dataset(local_file_path, format=data_params.file_format)
+        conn = db_manager.get_connection(data_params.database_role)
 
-        if dataset is None:
+        if data_params.local_path:
+            parquet_file = os.path.join(base_dir, data_params.local_path)
+            with conn.cursor() as cur:
+                reader = pq.ParquetFile(parquet_file)
+                cur.adbc_ingest(data_params.table_name, reader.iter_batches(), mode="create_append")
+                metadata = generate_metadata(reader.schema_arrow)
+
+        elif data_params.directory:
+            parquet_dataset = os.path.join(base_dir, data_params.directory)
+            reader = ds.dataset(
+                parquet_dataset,
+                format="parquet",
+                partitioning=data_params.partitioning,
+            )
+            with conn.cursor() as cur:
+                cur.adbc_ingest(data_params.table_name, reader, mode="create_append")
+                metadata = generate_metadata(reader.schema)
+
+        else:
             raise HTTPException(status_code=400, detail="Either local_path or directory must be provided.")
 
-        table = dataset.to_table()
-        conn = db_manager.get_connection(data_params.database_role)
-        ingest_to_database(conn, data_params.table_name, table)
+        conn.commit()
+
         end_time = time.time()
-        metadata = generate_metadata(table)
-        return {"status": f"{data_params.file_format.upper()} data loaded into {data_params.database_role.upper()}", "time_taken": end_time - start_time, "metadata": metadata}
+        return {
+            "status": f"{data_params.file_format.upper()} data loaded into {data_params.database_role.upper()}",
+            "time_taken": end_time - start_time,
+            "metadata": metadata,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

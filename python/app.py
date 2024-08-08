@@ -22,7 +22,14 @@ with open("config.yaml", "r") as file:
 
 base_dir = config['local']['base_dir']
 
-def generate_metadata(schema):
+def generate_metadata(schema_or_table):
+    if isinstance(schema_or_table, pa.Table):
+        schema = schema_or_table.schema
+    elif isinstance(schema_or_table, pa.Schema):
+        schema = schema_or_table
+    else:
+        raise ValueError("Expected a pyarrow.Table or pyarrow.Schema object")
+
     metadata = {
         "fields": [
             {
